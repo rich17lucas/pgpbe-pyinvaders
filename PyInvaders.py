@@ -1,3 +1,5 @@
+import random
+
 from collections import defaultdict
 
 from pyglet.image import load, ImageGrid, Animation
@@ -27,7 +29,6 @@ class Actor(cocos.sprite.Sprite):
     def collide(self, other):
         pass
 
-
 class PlayerCannon(Actor):
     KEYS_PRESSED = defaultdict(int)
 
@@ -37,6 +38,10 @@ class PlayerCannon(Actor):
 
     def update(self, elapsed):
         pressed = PlayerCannon.KEYS_PRESSED
+        space_pressed = pressed[key.SPACE] == 1
+        if PlayerShoot.INSTANCE is None and space_pressed:
+            self.parent.add(PlayerShoot(self.x, self.y + 50))
+
         movement = pressed[key.RIGHT] - pressed[key.LEFT]
         w = self.width * 0.5
         if movement != 0 and w <= self.x <= self.parent.width - w:
@@ -64,9 +69,10 @@ class GameLayer(cocos.layer.Layer):
         self.score = 0
         self.update_score()
         self.create_player()
-        self.create_alien_group(100,300)
+        self.create_alien_group(100, 300)
         cell = 1.25 * 50
-        self.collman = cm.CollisionManagerGrid(0, w, 0, h, cell, cell)
+        self.collman = cm.CollisionManagerGrid(0, w, 0, h,
+                                               cell, cell)
         self.schedule(self.update)
 
     def create_player(self):
@@ -88,8 +94,17 @@ class GameLayer(cocos.layer.Layer):
             if not self.collman.knows(node):
                 self.remove(node)
 
+        self.collide(PlayerShoot.INSTANCE)
+        if self.collide(self.player):
+            self.respawn_player()
+        for column in self.alien_group.columns:
+            shoot = column.shoot()
+            if shoot is not None:
+                self.add(shoot)
+
         for _, node in self.children:
             node.update(dt)
+        self.alien_group.update(dt)
 
     def collide(self, node):
         if node is not None:
@@ -97,6 +112,13 @@ class GameLayer(cocos.layer.Layer):
                 node.collide(other)
                 return True
         return False
+
+    def respawn_player(self):
+        self.lives -= 1
+        if self.lives < 0:
+            self.unschedule(self.update)
+        else:
+            self.create_player()
 
 class Alien(Actor):
     def load_animation(imgage):
@@ -123,7 +145,6 @@ class Alien(Actor):
         if self.column:
             self.column.remove(self)
 
-
 class AlienColumn(object):
     def __init__(self, x, y):
         alien_types = enumerate(['3', '3', '2', '2', '1'])
@@ -133,7 +154,6 @@ class AlienColumn(object):
     def should_turn(self, d):
         if len(self.aliens) == 0:
             return False
-
         alien = self.aliens[0]
         x, width = alien.x, alien.parent.width
         return x >= width - 50 and d == 1 or x <= 50 and d == -1
@@ -142,7 +162,10 @@ class AlienColumn(object):
         self.aliens.remove(alien)
 
     def shoot(self):
-        pass
+        if random.random() < 0.001 and len(self.aliens) > 0:
+            pos = self.aliens[0].position
+            return Shoot(pos[0], pos[1] - 50)
+        return None
 
 
 class AlienGroup(object):
@@ -162,17 +185,45 @@ class AlienGroup(object):
             if self.side_reached():
                 self.direction *= -1
                 offset = eu.Vector2(0, -10)
-                for alien in self:
-                    alien.move(offset)
+            for alien in self:
+                alien.move(offset)
 
     def side_reached(self):
-        return any(map(lambda c: c.should_turn(self.direction), self.columns))
+        return any(map(lambda c: c.should_turn(self.direction),
+                       self.columns))
 
     def __iter__(self):
         for column in self.columns:
             for alien in column.aliens:
                 yield alien
 
+class Shoot(Actor):
+    def __init__(self, x, y, img='img/shoot.png'):
+        super(Shoot, self).__init__(img, x, y)
+        self.speed = eu.Vector2(0, -400)
+
+    def update(self, elapsed):
+        self.move(self.speed * elapsed)
+
+class PlayerShoot(Shoot):
+    INSTANCE = None
+
+    def __init__(self, x, y):
+        super(PlayerShoot, self).__init__(x, y, 'img/laser.png')
+        self.speed *= -1
+        PlayerShoot.INSTANCE = self
+
+    def collide(self, other):
+        if isinstance(other, Alien):
+            self.parent.update_score(other.score)
+            other.kill()
+            self.kill()
+
+    def on_exit(self):
+        super(PlayerShoot, self).on_exit()
+        PlayerShoot.INSTANCE = None
+
+#TODO add HUD class
 
 if __name__ == '__main__':
     cocos.director.director.init(caption='Cocos Invaders',
